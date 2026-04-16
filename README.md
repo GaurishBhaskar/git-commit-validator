@@ -187,18 +187,6 @@ The test suite covers:
 
 ---
 
-## 🤖 CI Integration
-
-The included GitHub Actions workflow (`.github/workflows/validate.yml`) automatically:
-
-1. **Validates every commit** in a push or pull request
-2. **Runs the full test suite**
-3. **Lints all shell scripts** with `shellcheck`
-
-To use it, copy the `.github/` folder into your project repository.
-
----
-
 ## 🔧 Manual Testing
 
 Test the hook directly without making a commit:
@@ -223,17 +211,3 @@ bash hooks/commit-msg /tmp/test_msg
 ./install.sh --uninstall             # from current directory
 ./install.sh --uninstall /path/repo  # from specific repo
 ```
-
----
-
-## 📖 References
-
-- [Conventional Commits v1.0.0](https://www.conventionalcommits.org/en/v1.0.0/)
-- [Git Hooks Documentation](https://git-scm.com/docs/githooks)
-- [Angular Commit Message Convention](https://github.com/angular/angular/blob/main/CONTRIBUTING.md#commit)
-
----
-
-## 📄 License
-
-MIT © 2024
