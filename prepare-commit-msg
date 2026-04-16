@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Git Hook: prepare-commit-msg
+# Injects a Conventional Commits template into the commit message editor
+# =============================================================================
+
+COMMIT_MSG_FILE="$1"
+COMMIT_SOURCE="$2"   # message | template | merge | squash | commit
+
+# Only inject template for regular commits (not merges, squashes, amends)
+if [[ -n "$COMMIT_SOURCE" ]]; then
+  exit 0
+fi
+
+# Don't override if user already typed a message (e.g., git commit -m)
+EXISTING=$(grep -v '^#' "$COMMIT_MSG_FILE" | tr -d '[:space:]')
+if [[ -n "$EXISTING" ]]; then
+  exit 0
+fi
+
+CURRENT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+ISSUE_REF=""
+
+# Auto-detect issue number from branch name (e.g., feature/123-add-login → #123)
+if echo "$CURRENT_BRANCH" | grep -qE "[0-9]+"; then
+  ISSUE_NUM=$(echo "$CURRENT_BRANCH" | grep -oE '[0-9]+' | head -1)
+  ISSUE_REF="# Related: #${ISSUE_NUM}"
+fi
+
+cat > "$COMMIT_MSG_FILE" << EOF
+# ── Conventional Commits Template ────────────────────────────────────────────
+# Format: <type>[optional scope]: <short description>
+#
+# Types:
+#   feat      A new feature
+#   fix       A bug fix
+#   docs      Documentation changes only
+#   style     Formatting, whitespace (no logic change)
+#   refactor  Code restructure (no feature/fix)
+#   perf      Performance improvement
+#   test      Adding or updating tests
+#   build     Build system or dependency changes
+#   ci        CI/CD configuration changes
+#   chore     Routine tasks, maintenance
+#   revert    Revert a previous commit
+#
+# Examples:
+#   feat(auth): add OAuth2 login support
+#   fix(api): handle null response from payment gateway
+#   docs: update README with setup instructions
+#   feat!: redesign user dashboard (breaking change)
+#
+# Rules:
+#   ✔ Subject ≤ 72 characters
+#   ✔ No trailing period
+#   ✔ Blank line between subject and body
+#   ✔ Use imperative mood: "add" not "added"
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ── Optional body (explain WHY, not WHAT) ─────────────────────────────────
+
+${ISSUE_REF}
+# ── Optional footer ───────────────────────────────────────────────────────
+# Closes #<issue>
+# BREAKING CHANGE: <description>
+EOF

@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Git Hook: commit-msg
+# Validates commit messages against Conventional Commits specification
+# =============================================================================
+
+COMMIT_MSG_FILE="$1"
+COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+RESET='\033[0m'
+
+# Config file (optional override)
+CONFIG_FILE=".commitvalidatorrc"
+
+# ── Default Rules ─────────────────────────────────────────────────────────────
+MAX_SUBJECT_LENGTH=72
+MIN_SUBJECT_LENGTH=10
+ALLOWED_TYPES="feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert"
+REQUIRE_SCOPE=false        # set to true to enforce scope
+REQUIRE_BODY=false         # set to true to require body
+REQUIRE_ISSUE_REF=false    # set to true to require issue/ticket reference
+
+# ── Load config if present ───────────────────────────────────────────────────
+if [[ -f "$CONFIG_FILE" ]]; then
+  # shellcheck source=/dev/null
+  source "$CONFIG_FILE"
+fi
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+print_header() {
+  echo -e "\n${BOLD}${CYAN}╔══════════════════════════════════════════╗${RESET}"
+  echo -e "${BOLD}${CYAN}║      Git Commit Message Validator        ║${RESET}"
+  echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════╝${RESET}\n"
+}
+
+pass() { echo -e "  ${GREEN}✔${RESET}  $1"; }
+fail() { echo -e "  ${RED}✘${RESET}  $1"; ERRORS=$((ERRORS + 1)); }
+warn() { echo -e "  ${YELLOW}⚠${RESET}  $1"; }
+info() { echo -e "  ${CYAN}ℹ${RESET}  $1"; }
+
+ERRORS=0
+
+# ── Skip merge / fixup / revert auto-commits ─────────────────────────────────
+if echo "$COMMIT_MSG" | grep -qE "^(Merge|Revert|fixup!|squash!)"; then
+  exit 0
+fi
+
+# ── Strip comment lines ───────────────────────────────────────────────────────
+CLEAN_MSG=$(echo "$COMMIT_MSG" | grep -v '^#')
+SUBJECT=$(echo "$CLEAN_MSG" | head -n 1)
+BODY=$(echo "$CLEAN_MSG" | tail -n +3)
+
+print_header
+echo -e "${BOLD}Validating:${RESET} \"${SUBJECT}\"\n"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rule 1 – Subject must not be empty
+# ─────────────────────────────────────────────────────────────────────────────
+if [[ -z "$SUBJECT" ]]; then
+  fail "Subject line is empty"
+  echo -e "\n${RED}${BOLD}Commit rejected: subject cannot be empty.${RESET}\n"
+  exit 1
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rule 2 – Conventional Commits format
+#   <type>[optional scope]: <description>
+# ─────────────────────────────────────────────────────────────────────────────
+PATTERN="^($ALLOWED_TYPES)(\([a-zA-Z0-9_\-]+\))?(!)?: .+"
+
+if [[ "$SUBJECT" =~ $PATTERN ]]; then
+  pass "Follows Conventional Commits format"
+  TYPE="${BASH_REMATCH[1]}"
+  SCOPE_RAW="${BASH_REMATCH[2]}"
+  BREAKING="${BASH_REMATCH[3]}"
+  SCOPE="${SCOPE_RAW//[()]/}"
+else
+  fail "Does not follow Conventional Commits format"
+  info "Expected: <type>[optional scope]: <description>"
+  info "Allowed types: $(echo "$ALLOWED_TYPES" | tr '|' ', ')"
+  info "Examples:"
+  info "  feat(auth): add OAuth2 login"
+  info "  fix: correct null pointer in parser"
+  info "  docs(readme): update installation steps"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rule 3 – Type must be lowercase
+# ─────────────────────────────────────────────────────────────────────────────
+if echo "$SUBJECT" | grep -qE "^[A-Z]+[^:]*:"; then
+  fail "Type must be lowercase (e.g., 'feat' not 'Feat')"
+else
+  pass "Type is lowercase"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rule 4 – Subject length
+# ─────────────────────────────────────────────────────────────────────────────
+SUBJ_LEN=${#SUBJECT}
+if [[ $SUBJ_LEN -gt $MAX_SUBJECT_LENGTH ]]; then
+  fail "Subject too long: $SUBJ_LEN chars (max $MAX_SUBJECT_LENGTH)"
+elif [[ $SUBJ_LEN -lt $MIN_SUBJECT_LENGTH ]]; then
+  fail "Subject too short: $SUBJ_LEN chars (min $MIN_SUBJECT_LENGTH)"
+else
+  pass "Subject length OK ($SUBJ_LEN chars)"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rule 5 – No trailing period on subject
+# ─────────────────────────────────────────────────────────────────────────────
+if echo "$SUBJECT" | grep -q '\.$'; then
+  fail "Subject must not end with a period (.)"
+else
+  pass "No trailing period"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rule 6 – Description must not start with uppercase after colon
+# ─────────────────────────────────────────────────────────────────────────────
+DESCRIPTION=$(echo "$SUBJECT" | sed 's/^[^:]*: //')
+FIRST_CHAR=$(echo "$DESCRIPTION" | cut -c1)
+if [[ "$FIRST_CHAR" =~ [A-Z] ]]; then
+  warn "Description starts with uppercase – convention prefers lowercase"
+  info "e.g., 'feat: add feature' not 'feat: Add feature'"
+else
+  pass "Description starts with lowercase"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rule 7 – No WIP commits on protected branches
+# ─────────────────────────────────────────────────────────────────────────────
+CURRENT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "unknown")
+PROTECTED_BRANCHES="main|master|release|production"
+if echo "$CURRENT_BRANCH" | grep -qE "^($PROTECTED_BRANCHES)$"; then
+  if echo "$SUBJECT" | grep -qiE "^wip|^WIP|\bwip\b"; then
+    fail "WIP commits are not allowed on protected branch '$CURRENT_BRANCH'"
+  else
+    pass "No WIP on protected branch"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rule 8 – Blank line between subject and body (if body exists)
+# ─────────────────────────────────────────────────────────────────────────────
+LINE_TWO=$(echo "$CLEAN_MSG" | sed -n '2p')
+if [[ -n "$BODY" && -n "$LINE_TWO" ]]; then
+  fail "Missing blank line between subject and body"
+else
+  pass "Blank line separator OK"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rule 9 – Body lines max 100 chars
+# ─────────────────────────────────────────────────────────────────────────────
+if [[ -n "$BODY" ]]; then
+  LONG_LINES=$(echo "$BODY" | awk 'length > 100 {print NR": "substr($0,1,60)"..."}')
+  if [[ -n "$LONG_LINES" ]]; then
+    warn "Some body lines exceed 100 characters:"
+    echo "$LONG_LINES" | while read -r line; do info "  Line $line"; done
+  else
+    pass "Body line length OK"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rule 10 – Scope required (optional rule)
+# ─────────────────────────────────────────────────────────────────────────────
+if [[ "$REQUIRE_SCOPE" == "true" ]]; then
+  if [[ -z "$SCOPE" ]]; then
+    fail "Scope is required (e.g., feat(auth): ...)"
+  else
+    pass "Scope present: '$SCOPE'"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rule 11 – Body required (optional rule)
+# ─────────────────────────────────────────────────────────────────────────────
+if [[ "$REQUIRE_BODY" == "true" ]]; then
+  if [[ -z "$BODY" ]]; then
+    fail "Commit body is required – explain the 'why'"
+  else
+    pass "Body present"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rule 12 – Issue reference (optional rule)
+# ─────────────────────────────────────────────────────────────────────────────
+if [[ "$REQUIRE_ISSUE_REF" == "true" ]]; then
+  if ! echo "$COMMIT_MSG" | grep -qE "(#[0-9]+|[A-Z]+-[0-9]+|Closes|Fixes|Resolves)"; then
+    fail "Issue reference required (e.g., Closes #42 or Fixes JIRA-123)"
+  else
+    pass "Issue reference found"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Breaking change info
+# ─────────────────────────────────────────────────────────────────────────────
+if [[ "$BREAKING" == "!" ]] || echo "$COMMIT_MSG" | grep -q "^BREAKING CHANGE:"; then
+  warn "Breaking change detected – remember to update CHANGELOG"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Final verdict
+# ─────────────────────────────────────────────────────────────────────────────
+echo ""
+if [[ $ERRORS -gt 0 ]]; then
+  echo -e "${RED}${BOLD}╔══════════════════════════════════════════╗${RESET}"
+  echo -e "${RED}${BOLD}║  COMMIT REJECTED – $ERRORS error(s) found$(printf '%*s' $((18 - ${#ERRORS})) '')║${RESET}"
+  echo -e "${RED}${BOLD}╚══════════════════════════════════════════╝${RESET}"
+  echo -e "\n${YELLOW}Run ${BOLD}cat .git/COMMIT_EDITMSG${RESET}${YELLOW} to review your message.${RESET}"
+  echo -e "${YELLOW}Edit with: ${BOLD}git commit --amend${RESET}\n"
+  exit 1
+else
+  echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════╗${RESET}"
+  echo -e "${GREEN}${BOLD}║        COMMIT ACCEPTED ✔                 ║${RESET}"
+  echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════╝${RESET}\n"
+  exit 0
+fi
